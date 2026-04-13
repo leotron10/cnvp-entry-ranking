@@ -344,36 +344,34 @@ def generar_excel(dfs: dict[str, pd.DataFrame]) -> bytes:
     return output.getvalue()
 
 
-@st.cache_data(ttl=300, show_spinner="Generando lista de entrada...")
-def cargar_resultados(torneo: dict) -> tuple[dict, str]:
-    """Carga inscritos + ranking y devuelve resultados procesados."""
+@st.cache_data(ttl=300, show_spinner=False)
+def _cargar_resultados_cached(url_torneo: str, nombre_torneo: str) -> tuple[dict, str, str]:
+    """
+    Version cacheable (sin llamadas a st.*).
+    Devuelve (resultados, nombre, error).
+    """
     try:
-        ids = obtener_ids_torneo(torneo["url"])
+        ids = obtener_ids_torneo(url_torneo)
     except Exception as e:
-        st.error(f"Error al acceder a las inscripciones: {e}")
-        return {}, ""
+        return {}, "", f"Error al acceder a las inscripciones: {e}"
 
     if not ids:
-        st.warning("No se encontraron IDs de torneo en la pagina de inscripciones.")
-        return {}, ""
+        return {}, "", "No se encontraron IDs de torneo en la pagina de inscripciones."
 
-    inscritos_fem = []
-    inscritos_masc = []
+    inscritos_fem, inscritos_masc = [], []
     try:
         if "femenino" in ids:
             inscritos_fem = obtener_inscritos(ids["femenino"])
         if "masculino" in ids:
             inscritos_masc = obtener_inscritos(ids["masculino"])
     except Exception as e:
-        st.error(f"Error al obtener inscritos: {e}")
-        return {}, ""
+        return {}, "", f"Error al obtener inscritos: {e}"
 
     try:
         ranking_fem = obtener_ranking("femenino")
         ranking_masc = obtener_ranking("masculino")
     except Exception as e:
-        st.error(f"Error al obtener el ranking nacional: {e}")
-        return {}, ""
+        return {}, "", f"Error al obtener el ranking nacional: {e}"
 
     resultados = {}
     if inscritos_fem:
@@ -386,10 +384,21 @@ def cargar_resultados(torneo: dict) -> tuple[dict, str]:
         )
 
     if not resultados:
-        st.warning("No hay parejas inscritas en este torneo.")
-        return {}, ""
+        return {}, "", "No hay parejas inscritas en este torneo todavia."
 
-    return resultados, torneo["nombre"]
+    return resultados, nombre_torneo, ""
+
+
+def cargar_resultados(torneo: dict) -> tuple[dict, str]:
+    """Wrapper que muestra errores en la UI y devuelve (resultados, nombre)."""
+    with st.spinner("Cargando inscripciones y ranking..."):
+        resultados, nombre, error = _cargar_resultados_cached(
+            torneo["url"], torneo["nombre"]
+        )
+    if error:
+        st.warning(error)
+        return {}, ""
+    return resultados, nombre
 
 
 # ---------------------------------------------------------------------------
@@ -435,72 +444,72 @@ def main():
     if not resultados:
         return
 
-        # Selector de tamanyo del cuadro final
-        cuadro_final_size = st.number_input(
-            "Parejas en Cuadro Final:",
-            min_value=1,
-            max_value=64,
-            value=12,
-            step=1,
-            help="Numero de parejas que entran directamente al cuadro final.",
+    # Selector de tamanyo del cuadro final
+    cuadro_final_size = st.number_input(
+        "Parejas en Cuadro Final:",
+        min_value=1,
+        max_value=64,
+        value=12,
+        step=1,
+        help="Numero de parejas que entran directamente al cuadro final.",
+    )
+
+    cols_display = [
+        "Pos.", "Pareja", "Jugador 1", "Puntos J1",
+        "Jugador 2", "Puntos J2", "Puntos Totales",
+    ]
+    col_config = {
+        "Puntos J1": st.column_config.NumberColumn(format="%.0f"),
+        "Puntos J2": st.column_config.NumberColumn(format="%.0f"),
+        "Puntos Totales": st.column_config.NumberColumn(format="%.0f"),
+    }
+
+    excel_sheets = {}
+
+    for genero, df in resultados.items():
+        if df.empty:
+            continue
+
+        df_cf = df.iloc[:cuadro_final_size].copy()
+        df_cc = df.iloc[cuadro_final_size:].copy()
+        if not df_cc.empty:
+            df_cc["Pos."] = range(1, len(df_cc) + 1)
+
+        # --- Cuadro Final ---
+        st.subheader(f"Cuadro Final {genero} — {torneo_nombre}")
+        st.dataframe(
+            df_cf[cols_display],
+            use_container_width=True,
+            hide_index=True,
+            column_config=col_config,
         )
 
-        cols_display = [
-            "Pos.", "Pareja", "Jugador 1", "Puntos J1",
-            "Jugador 2", "Puntos J2", "Puntos Totales",
-        ]
-        col_config = {
-            "Puntos J1": st.column_config.NumberColumn(format="%.0f"),
-            "Puntos J2": st.column_config.NumberColumn(format="%.0f"),
-            "Puntos Totales": st.column_config.NumberColumn(format="%.0f"),
-        }
-
-        excel_sheets = {}
-
-        for genero, df in resultados.items():
-            if df.empty:
-                continue
-
-            df_cf = df.iloc[:cuadro_final_size].copy()
-            df_cc = df.iloc[cuadro_final_size:].copy()
-            if not df_cc.empty:
-                df_cc["Pos."] = range(1, len(df_cc) + 1)
-
-            # --- Cuadro Final ---
-            st.subheader(f"Cuadro Final {genero} — {torneo_nombre}")
+        # --- Cuadro Clasificacion ---
+        if not df_cc.empty:
+            st.subheader(f"Cuadro Clasificacion {genero} — {torneo_nombre}")
             st.dataframe(
-                df_cf[cols_display],
+                df_cc[cols_display],
                 use_container_width=True,
                 hide_index=True,
                 column_config=col_config,
             )
 
-            # --- Cuadro Clasificacion ---
-            if not df_cc.empty:
-                st.subheader(f"Cuadro Clasificacion {genero} — {torneo_nombre}")
-                st.dataframe(
-                    df_cc[cols_display],
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config=col_config,
-                )
+        excel_sheets[f"CF {genero}"] = df_cf
+        if not df_cc.empty:
+            excel_sheets[f"CC {genero}"] = df_cc
 
-            excel_sheets[f"CF {genero}"] = df_cf
-            if not df_cc.empty:
-                excel_sheets[f"CC {genero}"] = df_cc
-
-        # Boton de descarga Excel
-        st.divider()
-        excel_data = generar_excel(excel_sheets)
-        nombre_archivo = f"Lista_Entrada_{torneo_nombre.replace(' ', '_')}.xlsx"
-        st.download_button(
-            label="📥 Descargar Lista de Entrada (.xlsx)",
-            data=excel_data,
-            file_name=nombre_archivo,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.document",
-            type="primary",
-            use_container_width=True,
-        )
+    # Boton de descarga Excel
+    st.divider()
+    excel_data = generar_excel(excel_sheets)
+    nombre_archivo = f"Lista_Entrada_{torneo_nombre.replace(' ', '_')}.xlsx"
+    st.download_button(
+        label="📥 Descargar Lista de Entrada (.xlsx)",
+        data=excel_data,
+        file_name=nombre_archivo,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.document",
+        type="primary",
+        use_container_width=True,
+    )
 
     # --- Footer ---
     st.divider()
