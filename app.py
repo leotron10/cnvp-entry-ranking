@@ -33,6 +33,23 @@ RANKING_MASC_URL = "https://intranet.rfevb.com/webservices/rfevbcom/vplaya/vp-ra
 RANKING_FEM_URL = "https://intranet.rfevb.com/webservices/rfevbcom/vplaya/vp-ranking-femenino.php"
 INSCRIPCIONES_URL = "https://intranet.rfevb.com/webservices/rfevbcom/vplaya/vp-parejas-torneo.php"
 
+# Tamanyo de cuadros por torneo (slug): (cf_masc, cc_masc, cf_fem, cc_fem)
+# Basado en normativas 2026 y datos historicos 2025.
+TAMANYO_CUADROS: dict[str, tuple[int, int, int, int]] = {
+    "cnvp-copa-comunidad-de-madrid-2026":               (12, 16, 12, 16),
+    "cnvp-orihuela-2026":                               (12, 13, 12,  7),
+    "cnvp-las-palmas-2026":                             (12, 16, 12,  8),
+    "cnvp-la-linea-de-la-concepcion-2026":              (12, 13, 12, 13),
+    "v-trofeo-cidade-da-coruna-2026":                   ( 8, 12,  8, 11),
+    "cnvp-asturias-2026":                               ( 8, 15,  8, 14),
+    "copa-de-espana-de-voley-playa-2026":               (12,  9, 12, 10),
+    "copa-del-rey-y-de-la-reina-de-voley-playa-2026":  (12,  0, 12,  0),
+    "campeonato-de-espana-de-voley-playa-2026":         ( 8, 17,  8, 16),
+}
+# Valores por defecto cuando el slug no esta en la tabla
+DEFAULT_CF = 12
+DEFAULT_CC = 12
+
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -444,15 +461,39 @@ def main():
     if not resultados:
         return
 
-    # Selector de tamanyo del cuadro final
-    cuadro_final_size = st.number_input(
-        "Parejas en Cuadro Final:",
-        min_value=1,
-        max_value=64,
-        value=12,
-        step=1,
-        help="Numero de parejas que entran directamente al cuadro final.",
+    # Tamanyo de cuadros: auto-detectado por slug, con override manual
+    slug = torneo["slug"]
+    cf_masc_def, cc_masc_def, cf_fem_def, cc_fem_def = TAMANYO_CUADROS.get(
+        slug, (DEFAULT_CF, DEFAULT_CC, DEFAULT_CF, DEFAULT_CC)
     )
+
+    with st.expander("Ajustar tamanyo de cuadros", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**Masculino**")
+            cf_masc = st.number_input(
+                "Cuadro Final (M)", min_value=0, max_value=64,
+                value=cf_masc_def, step=1, key="cf_masc",
+            )
+            cc_masc = st.number_input(
+                "Cuadro Clasificacion (M)", min_value=0, max_value=64,
+                value=cc_masc_def, step=1, key="cc_masc",
+            )
+        with col2:
+            st.markdown("**Femenino**")
+            cf_fem = st.number_input(
+                "Cuadro Final (F)", min_value=0, max_value=64,
+                value=cf_fem_def, step=1, key="cf_fem",
+            )
+            cc_fem = st.number_input(
+                "Cuadro Clasificacion (F)", min_value=0, max_value=64,
+                value=cc_fem_def, step=1, key="cc_fem",
+            )
+
+    sizes = {
+        "Masculino": (cf_masc, cc_masc),
+        "Femenino":  (cf_fem,  cc_fem),
+    }
 
     cols_display = [
         "Pos.", "Pareja", "Jugador 1", "Puntos J1",
@@ -470,10 +511,18 @@ def main():
         if df.empty:
             continue
 
-        df_cf = df.iloc[:cuadro_final_size].copy()
-        df_cc = df.iloc[cuadro_final_size:].copy()
+        cf_size, cc_size = sizes.get(genero, (DEFAULT_CF, DEFAULT_CC))
+
+        df_cf = df.iloc[:cf_size].copy()
+        df_cc = df.iloc[cf_size:cf_size + cc_size].copy() if cc_size > 0 else pd.DataFrame()
+        df_re = df.iloc[cf_size + cc_size:].copy()
+
         if not df_cc.empty:
+            df_cc = df_cc.copy()
             df_cc["Pos."] = range(1, len(df_cc) + 1)
+        if not df_re.empty:
+            df_re = df_re.copy()
+            df_re["Pos."] = range(1, len(df_re) + 1)
 
         # --- Cuadro Final ---
         st.subheader(f"Cuadro Final {genero} — {torneo_nombre}")
@@ -494,9 +543,21 @@ def main():
                 column_config=col_config,
             )
 
+        # --- Reservas ---
+        if not df_re.empty:
+            st.subheader(f"Reservas {genero} — {torneo_nombre}")
+            st.dataframe(
+                df_re[cols_display],
+                use_container_width=True,
+                hide_index=True,
+                column_config=col_config,
+            )
+
         excel_sheets[f"CF {genero}"] = df_cf
         if not df_cc.empty:
             excel_sheets[f"CC {genero}"] = df_cc
+        if not df_re.empty:
+            excel_sheets[f"RE {genero}"] = df_re
 
     # Boton de descarga Excel
     st.divider()
